@@ -410,8 +410,7 @@ end
 
 function build_tree_purity(clusters::Vector{Cluster}, D::Int64, classes; 
     multivariate::Bool=false, time_limit::Int64=-1, 
-    mu::Float64=10^(-4), useFhS::Bool=false, useFeS::Bool=false,
-    alpha::Float64=0.5)
+    mu::Float64=10^(-4), useFhS::Bool=false, useFeS::Bool=false, alpha::Float64=0.0)
 
     # Original setup remains the same
     dataCount = sum(length(c.dataIds) for c in clusters)
@@ -546,7 +545,7 @@ function build_tree_purity(clusters::Vector{Cluster}, D::Int64, classes;
         @constraint(m, [i in 1:clusterCount, t in 1:sepCount], u_at[i, t*2+1] <= sum(a[j, t] for j in 1:featuresCount)) # contrainte de capacité empechant les données de passer dans le fils droit d'un noeud n'appliquant pas de règle de branchement
     end
 
-
+    # println("Cluster purities", cluster_purities)
     @objective(m, Max, sum(cluster_purities[i] * (length(clusters[i].dataIds)^alpha) * u_at[i,1] for i in 1:clusterCount))
 
 

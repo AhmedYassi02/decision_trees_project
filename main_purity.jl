@@ -33,20 +33,24 @@ function main_merge_purity()
             
             # Univariate case
             println("\t\tUnivarié")
+            println("\t\t\t- Iterative heuristic (FhS)")
             testMergePurity(X_train, Y_train, X_test, Y_test, D, classes, 
-                          time_limit=time_limit, isMultivariate=false)
+                          time_limit=time_limit, isMultivariate=false, isExact=false)
+            println("\t\t\t- Iterative exact (FeS)")
+            testMergePurity(X_train, Y_train, X_test, Y_test, D, classes, 
+                          time_limit=time_limit, isMultivariate=false, isExact=true)
             
-            # Multivariate case
-            println("\t\tMultivarié") 
-            testMergePurity(X_train, Y_train, X_test, Y_test, D, classes,
-                          time_limit=time_limit, isMultivariate=true)
+            # # Multivariate case
+            # println("\t\tMultivarié") 
+            # testMergePurity(X_train, Y_train, X_test, Y_test, D, classes,
+            #               time_limit=time_limit, isMultivariate=true)
         end
     end
 end
 
 function testMergePurity(X_train, Y_train, X_test, Y_test, D, classes;
-                       time_limit::Int=-1, isMultivariate::Bool=false, alpha::Float64=0.0, )    
-    println("\t\t\tGamma\t#Clust\tGap\tTrainErr\tTestErr\tTime(s)")
+                       time_limit::Int=-1, isMultivariate::Bool=false, alpha::Float64=1.0, isExact::Bool=false)    
+    println("\t\t\tGamma\t#Clust\tGap\tTrainErr/TestErr\tTime(s)")
     
     for gamma in 0:0.2:1
         print("\t\t\t", gamma * 100, "%\t")
@@ -57,12 +61,11 @@ function testMergePurity(X_train, Y_train, X_test, Y_test, D, classes;
         
 
         # Build tree with new objective
-        T, obj, resolution_time, gap = build_tree_purity(clusters, D, classes, multivariate=isMultivariate,time_limit=time_limit, alpha = 0.0)
+        T, obj, resolution_time, gap = build_tree_purity(clusters, D, classes, multivariate=isMultivariate,time_limit=time_limit, alpha = alpha, useFhS = !isExact, useFeS = isExact )
         
         # Print results
         print(round(gap, digits=1), "%\t")
-        print(prediction_errors(T,X_train,Y_train, classes), "\t")
-        print(prediction_errors(T,X_test,Y_test, classes), "\t")
+        print(prediction_errors(T,X_train,Y_train, classes), "/" , prediction_errors(T,X_test,Y_test, classes), "\t")
         println(round(resolution_time, digits=1), "s")
     end
     println() 
