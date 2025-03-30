@@ -3,7 +3,7 @@ include("utilities.jl")
 include("merge.jl")
 
 function main_merge_purity()
-    for dataSetName in ["iris", "seeds", "wine"]  
+    for dataSetName in ["iris", "seeds", "wine"]
         
         print("=== Dataset ", dataSetName)
         
@@ -61,7 +61,7 @@ function testMergePurity(X_train, Y_train, X_test, Y_test, D, classes;
         
 
         # Build tree with new objective
-        T, obj, resolution_time, gap = build_tree_purity(clusters, D, classes, multivariate=isMultivariate,time_limit=time_limit, alpha = alpha, useFhS = !isExact, useFeS = isExact )
+        T, obj, resolution_time, gap = build_tree_purity(clusters, D, classes, multivariate=isMultivariate,time_limit=time_limit, alpha = alpha, useFhS = !isExact, useFeS = isExact, y = Y_train)
         
         # Print results
         print(round(gap, digits=1), "%\t")

@@ -410,6 +410,185 @@ end
 
 function build_tree_purity(clusters::Vector{Cluster}, D::Int64, classes; 
     multivariate::Bool=false, time_limit::Int64=-1, 
+    mu::Float64=10^(-4), useFhS::Bool=false, useFeS::Bool=false, alpha::Float64=0.0, y::Vector{Any}=nothing)
+
+    # Original setup remains the same
+    dataCount = sum(length(c.dataIds) for c in clusters)
+    clusterCount = length(clusters)
+    featuresCount = size(clusters[1].x, 2)
+    classCount = length(classes)
+    sepCount = 2^D - 1
+    leavesCount = 2^D
+
+    m = Model(CPLEX.Optimizer)
+    set_silent(m)
+
+    if time_limit != -1
+        set_time_limit_sec(m, time_limit)
+    end
+
+    # get purity of the clusters
+    purity = zeros(Float64, clusterCount, classCount)
+    for i in 1:clusterCount
+        for k in 1:classCount
+            purity[i, k] = sum(ones(Int64, length(clusters[i].dataIds))*clusters[i].class .== y[clusters[i].dataIds]) / length(clusters[i].dataIds)
+        end
+    end
+    # the cluster purtity is the maximum of the purity of the classes
+    cluster_purities = zeros(Float64, clusterCount)
+    for i in 1:clusterCount
+        cluster_purities[i] = maximum(purity[i, :])
+    end
+    
+    # Plus petite différence entre deux données pour une caractéristique
+    mu_min = 1.0 
+    # Plus grande différence entre deux données pour une caractéristique
+    mu_max = 0.0
+    
+    if !multivariate # calcul des constantes mu_min, mu_max et du vecteur mu
+        mu_vect = ones(Float64, featuresCount)
+        for j in 1:featuresCount
+            for i1 in 1:clusterCount
+                for i2 in (i1+1):clusterCount
+
+                    if useFhS || useFeS
+                        if abs(clusters[i1].barycenter[j] - clusters[i2].barycenter[j]) > 1E-4
+                            mu_vect[j] = min(mu_vect[j], abs(clusters[i1].barycenter[j] - clusters[i2].barycenter[j]))
+                        end
+                    else  
+                    v1 = clusters[i1].lBounds[j] - clusters[i2].uBounds[j]
+                    v2 = clusters[i2].lBounds[j] - clusters[i1].uBounds[j]
+
+                    # Si les clusters n'ont pas des intervalles pour la caractéristique j qui s'intersectent
+                        if v1 > 1E-4 || v2 > 1E-4
+                        vMin = min(abs(v1), abs(v2))
+                        mu_vect[j] = min(mu_vect[j], vMin)
+                        end
+                    end
+                end
+            end
+            mu_min = min(mu_min, mu_vect[j])
+            mu_max = max(mu_max, mu_vect[j])
+        end
+    end
+
+
+    # Original variable declarations remain unchanged
+    if multivariate
+        @variable(m, a[1:featuresCount, 1:sepCount], base_name="a_{j,t}")
+        @variable(m, a_h[1:featuresCount, 1:sepCount], base_name="â_{j,t}")
+        @variable(m, s[1:featuresCount, 1:sepCount], Bin, base_name="s_{j,t}")
+        @variable(m, d[1:sepCount], Bin, base_name="d_t")
+    else
+        @variable(m, a[1:featuresCount, 1:sepCount], Bin, base_name="a")
+    end
+    @variable(m, b[1:sepCount], base_name="b_t")
+    @variable(m, c[1:classCount, 1:(sepCount+leavesCount)], Bin, base_name="c_{k,t}")
+    @variable(m, u_at[1:clusterCount, 1:(sepCount+leavesCount)], Bin, base_name="u^i_{a(t),t}")
+    @variable(m, u_tw[1:clusterCount, 1:(sepCount+leavesCount)], Bin, base_name="u^i_{t,w}")
+
+    if useFeS
+        @variable(m, r[1:dataCount], Bin)
+        @constraint(m, [clusterId in 1:clusterCount], sum(r[i] for i in clusters[clusterId].dataIds) == 1)
+    end
+
+    # Contraintes définissant la structure de l'arbre
+    if multivariate
+        @constraint(m, [t in 1:sepCount], d[t] + sum(c[k, t] for k in 1:classCount) == 1) # on s'assure que le noeud applique une règle de branchement OU attribue une classe
+        @constraint(m, [t in 1:sepCount], b[t] <= d[t]) # b doit être nul si il n'y a pas de branchement 
+        @constraint(m, [t in 1:sepCount], b[t] >= -d[t]) # b doit être nul si il n'y a pas de branchement 
+        @constraint(m, [t in 1:sepCount], sum(a_h[j, t] for j in 1:featuresCount) <= d[t]) # on borne la norme du vecteur a
+        @constraint(m, [t in 1:sepCount, j in 1:featuresCount], a[j, t] <= a_h[j, t]) # définition de â borne sup de la valeur absolu de a
+        @constraint(m, [t in 1:sepCount, j in 1:featuresCount], a[j, t] >= -a_h[j, t]) # définition de â borne sup de la valeur absolu de a
+        @constraint(m, [t in 1:sepCount, j in 1:featuresCount], a[j, t] <= s[j, t]) # définition de s, non nul ssi a non nul
+        @constraint(m, [t in 1:sepCount, j in 1:featuresCount], a[j, t] >= -s[j, t]) # définition de s, non nul ssi a non nul
+        @constraint(m, [t in 1:sepCount, j in 1:featuresCount], s[j, t] <= d[t]) # définition de d, non nul si il existe un coef non nul
+        @constraint(m, [t in 1:sepCount], sum(s[j, t] for j in 1:featuresCount) >= d[t]) # définition de d, non nul si il existe un coef non nul
+        @constraint(m, [t in 2:sepCount], d[t] <= d[t ÷ 2]) # on s'assure que si un noeud de branchement n'applique pas de règle de branchement, ses fils non plus
+    else
+        @constraint(m, [t in 1:sepCount], sum(a[j, t] for j in 1:featuresCount) + sum(c[k, t] for k in 1:classCount) == 1) # on s'assure que le noeud applique une règle de branchement OU attribue une classe
+        @constraint(m, [t in 1:sepCount], b[t] <= sum(a[j, t] for j in 1:featuresCount)) # b doit être nul si il n'y a pas de branchement 
+        @constraint(m, [t in 1:sepCount], b[t] >= 0) # b doit être positif
+    end
+
+    @constraint(m, [t in (sepCount+1):(sepCount+leavesCount)], sum(c[k, t] for k in 1:classCount) == 1) # on s'assure qu'on attribue une classe par feuille
+
+    # contraintes de conservation du flot et contraintes de capacité
+    @constraint(m, [i in 1:clusterCount, t in 1:sepCount], u_at[i, t] == u_at[i, t*2] + u_at[i, t*2+1] + u_tw[i, t]) # conservation du flot dans les noeuds de branchement
+    @constraint(m, [i in 1:clusterCount, t in (sepCount+1):(sepCount+leavesCount)], u_at[i, t] == u_tw[i, t]) # conservation du flot dans les feuilles
+    @constraint(m, [i in 1:clusterCount, t in 1:(sepCount+leavesCount)], u_tw[i, t] <= c[findfirst(classes .== clusters[i].class), t]) # contrainte de capacité qui impose le flot a etre nul si la classe de la feuille n'est pas la bonne
+    if multivariate
+        if useFhS
+            @constraint(m, [i in 1:clusterCount, t in 1:sepCount], sum(a[j, t]*clusters[i].barycenter[j] for j in 1:featuresCount) + mu <= b[t] + (2+mu)*(1-u_at[i, t*2])) # contrainte de capacité controlant le passage dans le noeud fils gauche
+            @constraint(m, [i in 1:clusterCount, t in 1:sepCount], sum(a[j, t]*clusters[i].barycenter[j] for j in 1:featuresCount) >= b[t] - 2*(1-u_at[i, t*2 + 1])) # contrainte de capacité controlant le passage dans le noeud fils droit
+        elseif useFeS
+            @constraint(m, [(clusterId, cluster) in enumerate(clusters), dataId in cluster.dataIds, t in 1:sepCount], sum(a[j, t]*cluster.x[dataId, j] for j in 1:featuresCount) + mu <= b[t] + (2+mu)*(2-u_at[clusterId, t*2]-r[dataId])) # contrainte de capacité controlant le passage dans le noeud fils gauche
+            @constraint(m, [(clusterId, cluster) in enumerate(clusters), dataId in cluster.dataIds, t in 1:sepCount], sum(a[j, t]*cluster.x[dataId, j] for j in 1:featuresCount) >= b[t] - 2*(1-u_at[clusterId, t*2 + 1])) # contrainte de capacité controlant le passage dans le noeud fils droit
+        
+        else 
+            @constraint(m, [i in 1:clusterCount, t in 1:sepCount, dataId in clusters[i].dataIds], sum(a[j, t]*clusters[i].x[dataId, j] for j in 1:featuresCount) + mu <= b[t] + (2+mu)*(1-u_at[i, t*2])) # contrainte de capacité controlant le passage dans le noeud fils gauche
+            @constraint(m, [i in 1:clusterCount, t in 1:sepCount, dataId in clusters[i].dataIds], sum(a[j, t]*clusters[i].x[dataId, j] for j in 1:featuresCount) >= b[t] - 2*(1-u_at[i, t*2 + 1])) # contrainte de capacité controlant le passage dans le noeud fils droit
+        end 
+        @constraint(m, [i in 1:clusterCount, t in 1:sepCount], u_at[i, t*2+1] <= d[t]) # contrainte de capacité empechant les données de passer dans le fils droit d'un noeud n'appliquant pas de règle de branchement
+    else
+        if useFhS
+            @constraint(m, [i in 1:clusterCount, t in 1:sepCount], sum(a[j, t]*(clusters[i].barycenter[j]+mu_vect[j]-mu_min) for j in 1:featuresCount) + mu_min <= b[t] + (1+mu_max)*(1-u_at[i, t*2])) # contrainte de capacité controlant le passage dans le noeud fils gauche
+            @constraint(m, [i in 1:clusterCount, t in 1:sepCount], sum(a[j, t]*clusters[i].barycenter[j] for j in 1:featuresCount) >= b[t] - (1-u_at[i, t*2 + 1])) # contrainte de capacité controlant le passage dans le noeud fils droit
+        elseif useFeS
+            @constraint(m, [(clusterId, cluster) in enumerate(clusters), dataId in cluster.dataIds, t in 1:sepCount], sum(a[j, t]*(cluster.x[dataId, j]+mu_vect[j]-mu_min) for j in 1:featuresCount) + mu_min <= b[t] + (1+mu_max)*(2-u_at[clusterId, t*2]-r[dataId])) # contrainte de capacité controlant le passage dans le noeud fils gauche
+            @constraint(m, [(clusterId, cluster) in enumerate(clusters), dataId in cluster.dataIds, t in 1:sepCount], sum(a[j, t]*cluster.x[dataId, j] for j in 1:featuresCount) >= b[t] - (2-u_at[clusterId, t*2 + 1]-r[dataId])) # contrainte de capacité controlant le passage dans le noeud fils droit
+    else
+        @constraint(m, [i in 1:clusterCount, t in 1:sepCount], sum(a[j, t]*(clusters[i].uBounds[j]+mu_vect[j]-mu_min) for j in 1:featuresCount) + mu_min <= b[t] + (1+mu_max)*(1-u_at[i, t*2])) # contrainte de capacité controlant le passage dans le noeud fils gauche
+        @constraint(m, [i in 1:clusterCount, t in 1:sepCount], sum(a[j, t]*clusters[i].lBounds[j] for j in 1:featuresCount) >= b[t] - (1-u_at[i, t*2 + 1])) # contrainte de capacité controlant le passage dans le noeud fils droit
+        end 
+        @constraint(m, [i in 1:clusterCount, t in 1:sepCount], u_at[i, t*2+1] <= sum(a[j, t] for j in 1:featuresCount)) # contrainte de capacité empechant les données de passer dans le fils droit d'un noeud n'appliquant pas de règle de branchement
+    end
+
+    @objective(m, Max, sum(cluster_purities[i] * (length(clusters[i].dataIds)^alpha) * u_at[i,1] for i in 1:clusterCount))
+
+
+    # Original solve and tree construction remains the same
+    starting_time = time()
+    optimize!(m)
+    resolution_time = time() - starting_time
+    gap = -1.0
+    T = nothing
+    objective = -1
+
+    if primal_status(m) == MOI.FEASIBLE_POINT
+    class = Vector{Int64}(undef, sepCount+leavesCount)
+    for t in 1:(sepCount+leavesCount)
+    k = argmax(value.(c[:,t]))
+    if value.(c[k,t]) >= 1.0 - 10^-4
+    class[t] = k
+    else
+    class[t] = -1
+    end
+    end
+
+    objective = JuMP.objective_value(m)
+
+    if termination_status(m) == MOI.OPTIMAL
+    gap = 0
+    else
+    bound = JuMP.objective_bound(m)
+    gap = 100.0 * abs(objective - bound) / (objective + 10^-4)
+    end   
+
+    if multivariate
+    T = Tree(D, class, round.(Int, value.(u_at)), round.(Int, value.(s)), clusters)
+    else
+    T = Tree(D, value.(a), class, round.(Int, value.(u_at)), clusters)
+    end
+    end   
+
+    return T, objective, resolution_time, gap
+end
+
+
+
+function build_tree_majority(clusters::Vector{Cluster}, D::Int64, classes; 
+    multivariate::Bool=false, time_limit::Int64=-1, 
     mu::Float64=10^(-4), useFhS::Bool=false, useFeS::Bool=false, alpha::Float64=0.0)
 
     # Original setup remains the same
@@ -427,20 +606,11 @@ function build_tree_purity(clusters::Vector{Cluster}, D::Int64, classes;
         set_time_limit_sec(m, time_limit)
     end
 
-    
-    # get purity of the clusters
-    purity = zeros(Float64, clusterCount, classCount)
+    # get size of majority class of the clusters
+    majority = zeros(Int64, clusterCount)
     for i in 1:clusterCount
-        for k in 1:classCount
-            purity[i, k] = sum(clusters[i].class .== classes[k]) / length(clusters[i].class)
-        end
+        majority[i] = maximum(clusters[i].class)
     end
-    # the cluster purtity is the maximum of the purity of the classes
-    cluster_purities = zeros(Float64, clusterCount)
-    for i in 1:clusterCount
-        cluster_purities[i] = maximum(purity[i, :])
-    end
-    
     # Plus petite différence entre deux données pour une caractéristique
     mu_min = 1.0 
     # Plus grande différence entre deux données pour une caractéristique

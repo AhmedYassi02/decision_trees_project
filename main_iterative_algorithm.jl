@@ -5,7 +5,7 @@ include("main_merge.jl")
 include("shift.jl")
 
 function main_iterative()
-    for dataSetName in ["iris", "seeds", "wine"]
+    for dataSetName in ["prima_indians", "thyroid_diff"]
         
         print("=== Dataset ", dataSetName)
         
@@ -34,12 +34,12 @@ function main_iterative()
         for D in 2:4
             println("\tD = ", D)
             println("\t\tUnivarié")
-            println("\t\t\t- Unsplittable clusters (FU)")
-            testMerge(X_train, Y_train, X_test, Y_test, D, classes, time_limit = time_limit, isMultivariate = false)
+            # println("\t\t\t- Unsplittable clusters (FU)")
+            # testMerge(X_train, Y_train, X_test, Y_test, D, classes, time_limit = time_limit, isMultivariate = false)
             println("\t\t\t- Iterative heuristic (FhS)")
             testIterative(X_train, Y_train, X_test, Y_test, D, classes, time_limit = time_limit, isMultivariate = false, isExact=false)
-            println("\t\t\t- Iterative heuristic (FhS) with shifts")
-            testIterative(X_train, Y_train, X_test, Y_test, D, classes, time_limit = time_limit, isMultivariate = false, isExact=false, shiftSeparations=true)
+            # println("\t\t\t- Iterative heuristic (FhS) with shifts")
+            # testIterative(X_train, Y_train, X_test, Y_test, D, classes, time_limit = time_limit, isMultivariate = false, isExact=false, shiftSeparations=true)
             println("\t\t\t- Iterative exact (FeS)")
             testIterative(X_train, Y_train, X_test, Y_test, D, classes, time_limit = time_limit, isMultivariate = false, isExact=true)
 

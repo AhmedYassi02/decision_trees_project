@@ -115,7 +115,7 @@ function simpleMerge(x, y, gamma)
         for id2 in id1+1:n
             if y[id1] == y[id2]
                 # Ajoute leur distance
-                push!(distances, Distance(id1, id2, x))
+                push!(distances, Distance(id1, id2, x, metric=:manhattan))
             end
         end
     end
